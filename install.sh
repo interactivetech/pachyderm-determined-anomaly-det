@@ -2,6 +2,11 @@
 # wget https://repo.anaconda.com/miniconda/Miniconda3-py38_22.11.1-1-Linux-x86_64.sh
 # bash Miniconda3-py38_22.11.1-1-Linux-x86_64.sh
 # conda init bash
+apt-get update && apt-get install unzip -y
+cd data
+unzip srcIP_10.42.0.1_normal.pcap.zip
+unzip srcIP_10.42.0.119_anomaly.pcap.zip 
+cd ..
 conda create -n netml_env python=3.8 
 conda activate netml_env
 pip install .
