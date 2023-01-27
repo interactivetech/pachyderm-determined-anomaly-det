@@ -9,4 +9,4 @@ pip install argcmdr
 pip install argparse_formatter
 pip install terminaltables
 pip install pyyaml
-pip insstall streamlit
+pip install streamlit
