@@ -8,7 +8,6 @@ __pycache__/
 
 # Proj Files
 
-*.pcap
 *.pt
 # Distribution / packaging
 .Python
