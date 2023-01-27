@@ -42,11 +42,11 @@ def prepare_pcap_data(normal_pcap_path, abnormal_pcap_path):
     )
     # print(df)
 
-    normal_feats = extract_iat_features(pcap_normal)
-    abnormal_feats = extract_iat_features(pcap_anomaly)
-    abnormal_feats=abnormal_feats[:,:-1]
-    np.save('data/normal_feats.npy', normal_feats) # save
-    np.save('data/abnormal_feats.npy', abnormal_feats) # save    
+    # normal_feats = extract_iat_features(pcap_normal)
+    # abnormal_feats = extract_iat_features(pcap_anomaly)
+    # abnormal_feats=abnormal_feats[:,:-1]
+    # np.save('data/normal_feats.npy', normal_feats) # save
+    # np.save('data/abnormal_feats.npy', abnormal_feats) # save    
     normal_feats = np.load('data/normal_feats.npy') # load
     abnormal_feats = np.load('data/abnormal_feats.npy') # load
     x_train, x_val,y_train, y_val = split_dataset(normal_feats,abnormal_feats)
