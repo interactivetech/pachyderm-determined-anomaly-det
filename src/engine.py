@@ -35,9 +35,12 @@ class BaseTrainer:
         dist: bool,
         save_every: int,
         model_dir: str,
-        epochs: int
+        epochs: int,
+        resume_enabled: bool
     )-> None:
         self.dist = dist
+        self.resume_enabled = resume_enabled
+        self.batch_size = batch_size
         self.gpu_id = gpu_id
         assert gpu_id in [0,1,2,3,'cpu']
 
@@ -82,7 +85,9 @@ class BaseTrainer:
         helper to check if resume training
         '''
         SAVE_PATH = os.path.join(self.model_dir,'last.pt')
-        if os.path.exists(SAVE_PATH):
+        if self.resume_enabled and os.path.exists(SAVE_PATH):
+            # either restart checkpoint, or not
+            # resulting in overwriting
             self._resume_checkpoint()
         
         
@@ -137,8 +142,8 @@ class BaseTrainer:
             'optimizer': self.optimizer.state_dict(),
             'losses':self.losses,
             'val_losses':self.val_losses,
-            'train_acc':self.train_accs,
-            'val_acc':self.val_accs
+            'train_accs':self.train_accs,
+            'val_accs':self.val_accs
         }
         torch.save(ckpt,os.path.join(self.model_dir,'last.pt'))
         del ckpt
@@ -165,6 +170,7 @@ class BaseTrainer:
         for e in range(self.epoch,self.epochs):
             self._run_epoch(e)
             if self.gpu_id in {'cpu',0} and e%self.save_every == 0:
+                print(f"Saving checkpoint at epoch {e}")
                 self._save_checkpoint(e)
 
 if __name__ == '__main__':
@@ -202,6 +208,7 @@ if __name__ == '__main__':
         dist=False,
         save_every=1,
         model_dir='/Users/mendeza/Documents/2023_projects/pachyderm-determined-anomaly-det/models',
-        epochs=10
+        epochs=30,
+        resume_enabled=True,
     )
     trainer.train()
