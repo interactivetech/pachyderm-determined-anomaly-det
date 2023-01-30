@@ -30,9 +30,12 @@ os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 
 parser = argparse.ArgumentParser(description='')
 parser.add_argument('--local_rank', default=-1,type=int,help='node rank for dist training')
-parser.add_argument('--multi',action='store_false',help='node rank for dist training')
+parser.add_argument('--multi',nargs='?', const=True, default=False,help='node rank for dist training')
 parser.add_argument('--batch_size', default=4,type=int,help='batch size')
-def main(rank:int, world_size: int,batch_size: int):
+parser.add_argument('--resume',nargs='?', const=True, default=False,help='resume training')
+parser.add_argument('--epochs', default=1,type=int,help='batch size')
+
+def main(rank:int, world_size: int,batch_size: int,resume_enabled: bool, epochs: int, multi: bool):
     '''
     '''
     # print("DDP Setup...")
@@ -67,11 +70,11 @@ def main(rank:int, world_size: int,batch_size: int):
         val_sampler=val_sampler,
         optimizer=optimizer,
         gpu_id=rank,
-        dist=True,
+        dist=multi,
         save_every=1,
         model_dir='models/',
-        epochs=40,
-        resume_enabled=False,
+        epochs=epochs,
+        resume_enabled=resume_enabled,
         nprocs = world_size
     )
     trainer.train()
@@ -80,8 +83,13 @@ def main(rank:int, world_size: int,batch_size: int):
 if __name__ == '__main__':
     args= parser.parse_args()
     args.nprocs = torch.cuda.device_count()
-    single_gpu=args.multi
+    single_gpu=not args.multi
     batch_size=args.batch_size
+    resume_enabled = args.resume
+    epochs = args.epochs
+    multi=args.multi
+    # print("args.multi: ",args.multi)
+    # print("args.resume: ",args.resume)
     # print(args.local_rank,args.nprocs)
     
     if single_gpu:
@@ -109,11 +117,11 @@ if __name__ == '__main__':
             val_sampler=None,
             optimizer=optimizer,
             gpu_id=0,
-            dist=False,
+            dist=multi,
             save_every=1,
             model_dir=os.path.join(os.path.dirname(__file__),'../models'),
-            epochs=30,
-            resume_enabled=False,
+            epochs=epochs,
+            resume_enabled=resume_enabled,
             nprocs=-1
         )
         trainer.train()
@@ -122,5 +130,5 @@ if __name__ == '__main__':
         init_seeds(args.local_rank)
         # print("Running Main...")
 
-        main(args.local_rank,args.nprocs,args.batch_size)
+        main(args.local_rank,args.nprocs,args.batch_size,resume_enabled,epochs,multi)
         # mp.spawn(main, args=(args.local_rank,args.nprocs), nprocs=args.nprocs)

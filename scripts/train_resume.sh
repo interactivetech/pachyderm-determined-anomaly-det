@@ -1,0 +1,1 @@
+python src/train.py --local_rank 0 --batch_size 16 --epochs 20 --resume 2>&1 | tee normal.log

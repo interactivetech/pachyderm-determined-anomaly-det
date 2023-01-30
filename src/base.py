@@ -94,6 +94,7 @@ class BaseTrainer:
         self.val_accs = ckpt['val_accs']
         self.model = classify_conv_model()
         self.model.load_state_dict(ckpt['model'])#ToDo load DP or DDP
+        self.model.to(self.gpu_id)
         # get optimizer
         self.optimizer = get_optimizer(self.model)
         self.optimizer.load_state_dict(ckpt['optimizer'])
