@@ -350,7 +350,7 @@ if __name__ == '__main__':
             gpu_id='cpu',
             dist=False,
             save_every=1,
-            model_dir='/Users/mendeza/Documents/2023_projects/pachyderm-determined-anomaly-det/models',
+            model_dir='models',
             epochs=30,
             resume_enabled=True,
             nprocs=-1

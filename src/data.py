@@ -4,7 +4,7 @@ import torch.utils.data as data
 from sklearn.model_selection import train_test_split
 from netml.pparser.parser import PCAP
 from utils import extract_iat_features
-
+import os
 class classify_anomaly_dataset(data.Dataset):
     def __init__(self, data, target):
         self.data = data
@@ -46,9 +46,11 @@ def prepare_pcap_data(normal_pcap_path, abnormal_pcap_path):
     # abnormal_feats = extract_iat_features(pcap_anomaly)
     # abnormal_feats=abnormal_feats[:,:-1]
     # np.save('data/normal_feats.npy', normal_feats) # save
-    # np.save('data/abnormal_feats.npy', abnormal_feats) # save    
+    # np.save('data/abnormal_feats.npy', abnormal_feats) # save 
+    # print("Loading...")   
     normal_feats = np.load('data/normal_feats.npy') # load
     abnormal_feats = np.load('data/abnormal_feats.npy') # load
+    # print("Done Loading!")  
     x_train, x_val,y_train, y_val = split_dataset(normal_feats,abnormal_feats)
 
     return x_train, x_val,y_train, y_val
@@ -67,3 +69,16 @@ def split_dataset(normal_feats,abnormal_feats):
     y_val = torch.LongTensor(y_val)
     # print(y_val)
     return x_train, x_val,y_train, y_val
+
+def load_and_prepare_pcap():
+    '''
+    '''
+    normal_pcap_path = os.path.join(os.path.dirname(__file__),'../data/srcIP_10.42.0.1_normal.pcap')
+    abnormal_pcap_path = os.path.join(os.path.dirname(__file__),'../data/srcIP_10.42.0.119_anomaly.pcap')
+    x_train, x_val,y_train, y_val = prepare_pcap_data(normal_pcap_path, abnormal_pcap_path)
+    x_train=x_train.unsqueeze(-1)# (N,12) -> (N,12,1)
+    x_val=x_val.unsqueeze(-1)# (N,12) -> (N,12,1)
+    
+    d_train = classify_anomaly_dataset(x_train,y_train)
+    d_val = classify_anomaly_dataset(x_val,y_val)
+    return d_train, d_val

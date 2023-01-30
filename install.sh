@@ -4,8 +4,8 @@
 # conda init bash
 apt-get update && apt-get install unzip -y
 cd data
-unzip srcIP_10.42.0.1_normal.pcap.zip
-unzip srcIP_10.42.0.119_anomaly.pcap.zip 
+unzip normal_feats.npy.zip
+unzip abnormal_feats.npy.zip 
 cd ..
 conda create -n netml_env python=3.8 
 conda activate netml_env
