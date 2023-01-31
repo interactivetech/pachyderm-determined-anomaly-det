@@ -21,6 +21,7 @@ import random
 from torch.distributed import init_process_group,destroy_process_group
 import datetime
 from engine import PytorchDDPTrainer
+from ssl_engine import SSLPytorchDDPTrainer
 '''
 python -m torch.distributed.launch --nproc_per_node=4 main_ddp.py 2>&1 | tee out.log
 '''
@@ -109,14 +110,17 @@ if __name__ == '__main__':
         print(dict(Counter(d_val.target.tolist())))
         optimizer = get_optimizer(model)
         init_seeds(0)
-        trainer = PytorchDDPTrainer(
+
+        device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
+
+        trainer = SSLPytorchDDPTrainer(
             model=model,
             train_data=train_dataloader,
             train_sampler=None,
             val_data=val_dataloader,
             val_sampler=None,
             optimizer=optimizer,
-            gpu_id=0,
+            gpu_id=device,
             dist=multi,
             save_every=1,
             model_dir=os.path.join(os.path.dirname(__file__),'../models'),

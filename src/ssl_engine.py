@@ -19,9 +19,9 @@ from utils import extract_iat_features,load_data, de_parallelize_model, init_see
 import random
 from torch.distributed import init_process_group,destroy_process_group
 import datetime
-from base import BaseTrainer
+from engine import PytorchDDPTrainer
 
-class PytorchDDPTrainer(BaseTrainer):
+class SSLPytorchDDPTrainer(PytorchDDPTrainer):
     def __init__(
         self,
         model: torch.nn.Module,
@@ -88,29 +88,7 @@ class PytorchDDPTrainer(BaseTrainer):
                 else:
                     reduced_loss=loss
 
-                return reduced_loss,preds
-    def _setup_train(self):
-        '''
-        set up training before beggining training
-        helper to check if resume training
-        '''
-        SAVE_PATH = os.path.join(self.model_dir,'last.pt')
-        #(Andrew 1.27.23): Dont know how to resume training for DDP
-        if self.resume_enabled and os.path.exists(SAVE_PATH) and not self.dist:
-            print("1: Single GPU resume")
-            # either restart checkpoint, or not
-            # resulting in overwriting
-            self._resume_checkpoint()
-        elif self.resume_enabled and os.path.exists(SAVE_PATH) and self.dist:
-            print("2: starting DDP from ckpt")
-
-            self._resume_ddp_checkpoint()
-        elif not self.resume_enabled and self.dist:
-            print("3: starting DDP from scratch: ",self.gpu_id)
-            self.model.to(self.gpu_id)
-            self.model = DDP(self.model,device_ids = [self.gpu_id])
-            self.optimizer = get_optimizer(self.model)
-        
+                return reduced_loss,preds    
         
     def _run_epoch(self,e):
         '''
@@ -190,18 +168,6 @@ class PytorchDDPTrainer(BaseTrainer):
         avg_epoch_train_loss,avg_epoch_val_loss))
         if self.gpu_id in {'cpu',0}:
             print(f"epoch {e} || Train Acc:", self.train_accs[-1]," || Val Acc:", self.val_accs[-1])
-        
-    def train(self):
-        '''
-        '''
-        self._setup_train()
-        for e in range(self.epoch,self.epochs):
-            self._run_epoch(e)
-            if self.gpu_id in {'cpu',0} and e%self.save_every == 0:
-                print(f"Saving checkpoint at epoch {e}")
-                self._save_checkpoint(e)
-        if self.dist:
-            destroy_process_group()
 
 
 if __name__ == '__main__':
