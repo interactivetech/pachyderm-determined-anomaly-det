@@ -20,6 +20,7 @@ import random
 from torch.distributed import init_process_group,destroy_process_group
 import datetime
 from base import BaseTrainer
+from data import classify_anomaly_dataset, prepare_pcap_data, load_and_prepare_pcap, get_ssl_pcap_dataset, get_pcap_ssl_and_val_non_ssl_dataset
 
 class PytorchDDPTrainer(BaseTrainer):
     def __init__(
@@ -200,8 +201,54 @@ class PytorchDDPTrainer(BaseTrainer):
             if self.gpu_id in {'cpu',0} and e%self.save_every == 0:
                 print(f"Saving checkpoint at epoch {e}")
                 self._save_checkpoint(e)
+        
+        self._save_train_results()
         if self.dist:
             destroy_process_group()
+
+def normal_train_setting(model:torch.nn.Module,
+                      batch_size:int,
+                      device:object,
+                      multi:bool,
+                      epochs: int,
+                      resume_enabled: bool,
+                      nprocs: int):
+    '''
+    '''
+    
+    # print("PATH: ", os.path.dirname(__file__))
+    print("Loading Data...")
+    d_train, d_val = load_and_prepare_pcap()
+    print("Data Loading Done!")
+    # batch_size = 4
+    train_dataloader = torch.utils.data.DataLoader(
+        d_train, batch_size=batch_size, shuffle=True)
+
+    val_dataloader = torch.utils.data.DataLoader(
+        d_val, batch_size=batch_size, shuffle=False)
+    # print(next(iter()))
+    print(dict(Counter(d_train.target.tolist())))
+    print(dict(Counter(d_val.target.tolist())))
+    optimizer = get_optimizer(model)
+    init_seeds(0)
+
+    
+    trainer = PytorchDDPTrainer(
+        model=model,
+        train_data=train_dataloader,
+        train_sampler=None,
+        val_data=val_dataloader,
+        val_sampler=None,
+        optimizer=optimizer,
+        gpu_id=device,
+        dist=multi,
+        save_every=1,
+        model_dir=os.path.join(os.path.dirname(__file__),'../models'),
+        epochs=epochs,
+        resume_enabled=resume_enabled,
+        nprocs=-1
+    )
+    trainer.train()
 
 
 if __name__ == '__main__':

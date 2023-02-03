@@ -1,0 +1,1 @@
+python src/train.py --local_rank 0 --batch_size 4 --epochs 40 --ssl_train 

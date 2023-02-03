@@ -9,6 +9,8 @@ __pycache__/
 # Proj Files
 *.npy
 *.pt
+*.tsv
+cifar*
 # Distribution / packaging
 .Python
 build/

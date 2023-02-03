@@ -7,8 +7,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn as nn
 import os
 import numpy as np
-from data import classify_anomaly_dataset, prepare_pcap_data, load_and_prepare_pcap
 from model import   classify_conv_model
+from data import load_and_prepare_pcap
 from utils import get_optimizer
 from collections import Counter
 import torch.nn.functional as F
@@ -20,8 +20,8 @@ from utils import extract_iat_features,load_data, de_parallelize_model, init_see
 import random
 from torch.distributed import init_process_group,destroy_process_group
 import datetime
-from engine import PytorchDDPTrainer
-from ssl_engine import SSLPytorchDDPTrainer
+from engine import PytorchDDPTrainer, normal_train_setting
+from ssl_engine import SSLPytorchDDPTrainer, ssl_train_setting, normal_train_setting_with_ssl_data
 '''
 python -m torch.distributed.launch --nproc_per_node=4 main_ddp.py 2>&1 | tee out.log
 '''
@@ -35,6 +35,8 @@ parser.add_argument('--multi',nargs='?', const=True, default=False,help='node ra
 parser.add_argument('--batch_size', default=4,type=int,help='batch size')
 parser.add_argument('--resume',nargs='?', const=True, default=False,help='resume training')
 parser.add_argument('--epochs', default=1,type=int,help='batch size')
+parser.add_argument('--ssl_train',nargs='?', const=True, default=False,help='resume training')
+
 
 def main(rank:int, world_size: int,batch_size: int,resume_enabled: bool, epochs: int, multi: bool):
     '''
@@ -89,46 +91,25 @@ if __name__ == '__main__':
     resume_enabled = args.resume
     epochs = args.epochs
     multi=args.multi
-    # print("args.multi: ",args.multi)
-    # print("args.resume: ",args.resume)
-    # print(args.local_rank,args.nprocs)
-    
-    if single_gpu:
-        model = classify_conv_model()# Make DDP
-        # print("PATH: ", os.path.dirname(__file__))
-        print("Loading Data...")
-        d_train, d_val = load_and_prepare_pcap()
-        print("Data Loading Done!")
-        # batch_size = 4
-        train_dataloader = torch.utils.data.DataLoader(
-            d_train, batch_size=batch_size, shuffle=True)
-
-        val_dataloader = torch.utils.data.DataLoader(
-            d_val, batch_size=batch_size, shuffle=False)
-        # print(next(iter()))
-        print(dict(Counter(d_train.target.tolist())))
-        print(dict(Counter(d_val.target.tolist())))
-        optimizer = get_optimizer(model)
-        init_seeds(0)
-
+    ssl_train=args.ssl_train
+    print("args.multi: ",args.multi)
+    print("single_gpu: ",single_gpu)
+    print("args.resume: ",args.resume)
+    print(args.local_rank,args.nprocs)
+    if single_gpu and not ssl_train:
         device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
-
-        trainer = SSLPytorchDDPTrainer(
-            model=model,
-            train_data=train_dataloader,
-            train_sampler=None,
-            val_data=val_dataloader,
-            val_sampler=None,
-            optimizer=optimizer,
-            gpu_id=device,
-            dist=multi,
-            save_every=1,
-            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
-            epochs=epochs,
-            resume_enabled=resume_enabled,
-            nprocs=-1
-        )
-        trainer.train()
+        model = classify_conv_model()# Make DDP
+        normal_train_setting(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1)
+    elif single_gpu and ssl_train:
+        model = classify_conv_model()
+        device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
+        ssl_setting=True
+        if ssl_setting:
+            print("Entering SSL Setting...")
+            ssl_train_setting(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1)
+        else:
+            print("Entering Normal Setting with limited data...")
+            normal_train_setting_with_ssl_data(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1)
     else:
         # print("single_gpu: ",single_gpu)
         init_seeds(args.local_rank)
@@ -136,3 +117,4 @@ if __name__ == '__main__':
 
         main(args.local_rank,args.nprocs,args.batch_size,resume_enabled,epochs,multi)
         # mp.spawn(main, args=(args.local_rank,args.nprocs), nprocs=args.nprocs)
+

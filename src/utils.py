@@ -7,6 +7,7 @@ import torch.backends.cudnn as cudnn
 from torch.distributed import init_process_group,destroy_process_group
 import datetime
 import torch.nn as nn
+
 def get_optimizer(model):
     return optim.Adam(model.parameters(), lr=5e-4)
 

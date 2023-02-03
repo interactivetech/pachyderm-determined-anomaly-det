@@ -7,7 +7,7 @@ import os
 from model import classify_conv_model
 from utils import get_optimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+import pandas as pd
 
 class BaseTrainer:
     def __init__(
@@ -82,6 +82,22 @@ class BaseTrainer:
         }
         torch.save(ckpt,os.path.join(self.model_dir,'last.pt'))
         del ckpt
+
+    def _save_train_results(self):
+        '''
+        save training result to tsv
+        ToDo: save confusion matrix, PR, PR Recall, classification report, TPR Curve, AUC
+        '''
+        if self.gpu_id in {'cpu',0}:
+            df = pd.DataFrame({
+                'Epoch':list(range(self.epochs)),
+                'Train Loss': [i.item() for i in self.losses],
+                'Val Losses': [i.item() for i in self.val_losses],
+                'Train Acc': [i.item() for i in self.train_accs],
+                'Val Acc': [i.item() for i in self.val_accs],
+            })
+            print("Saving results to {}".format(os.path.join(self.model_dir,'results.tsv')))
+            df.to_csv(os.path.join(self.model_dir,'results.tsv'),sep="\t")
 
     def _resume_checkpoint(self):
         '''
