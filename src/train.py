@@ -38,7 +38,7 @@ parser.add_argument('--epochs', default=1,type=int,help='batch size')
 parser.add_argument('--ssl_train',nargs='?', const=True, default=False,help='resume training')
 
 
-def main(rank:int, world_size: int,batch_size: int,resume_enabled: bool, epochs: int, multi: bool):
+def main(rank:int, world_size: int,batch_size: int,resume_enabled: bool, epochs: int, multi: bool, ssl_train: bool):
     '''
     '''
     # print("DDP Setup...")
@@ -46,41 +46,10 @@ def main(rank:int, world_size: int,batch_size: int,resume_enabled: bool, epochs:
     ddp_setup(rank,world_size=world_size)
 
     model = classify_conv_model()
-
-    d_train, d_val = load_and_prepare_pcap()
-
-    # batch_size = 4
-    train_sampler = torch.utils.data.distributed.DistributedSampler(d_train)
-    val_sampler = torch.utils.data.distributed.DistributedSampler(d_val,shuffle=False)
-    train_dataloader = torch.utils.data.DataLoader(
-        d_train, batch_size=batch_size, pin_memory= True, sampler=train_sampler)
-
-    val_dataloader = torch.utils.data.DataLoader(
-        d_val, batch_size=batch_size, pin_memory=True,sampler=val_sampler)
-    # print(next(iter()))
-    print(dict(Counter(d_train.target.tolist())))
-    print(dict(Counter(d_val.target.tolist())))
-    # print("Loading Optimizer...")
-    
-    optimizer = get_optimizer(model)
-    # print("Optimizer Loaded!")
-
-    trainer = PytorchDDPTrainer(
-        model=model,
-        train_data=train_dataloader,
-        train_sampler=train_sampler,
-        val_data=val_dataloader,
-        val_sampler=val_sampler,
-        optimizer=optimizer,
-        gpu_id=rank,
-        dist=multi,
-        save_every=1,
-        model_dir='models/',
-        epochs=epochs,
-        resume_enabled=resume_enabled,
-        nprocs = world_size
-    )
-    trainer.train()
+    if ssl_train:
+        ssl_train_setting(model,batch_size,rank,multi,epochs,resume_enabled,nprocs=world_size,dist=multi,world_size=world_size)
+    else:
+        normal_train_setting(model,batch_size,rank,multi,epochs,resume_enabled,nprocs=world_size,dist=multi,world_size=world_size)
     
     # parser.add_argument('')
 if __name__ == '__main__':
@@ -97,24 +66,24 @@ if __name__ == '__main__':
     print("args.resume: ",args.resume)
     print(args.local_rank,args.nprocs)
     if single_gpu and not ssl_train:
-        device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
+        device = 0 if torch.cuda.is_available() else "cpu"
         model = classify_conv_model()# Make DDP
-        normal_train_setting(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1)
+        normal_train_setting(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1,dist=False,world_size=-1)
     elif single_gpu and ssl_train:
         model = classify_conv_model()
-        device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
+        device = 0 if torch.cuda.is_available() else "cpu"
         ssl_setting=True
         if ssl_setting:
             print("Entering SSL Setting...")
-            ssl_train_setting(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1)
+            ssl_train_setting(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1,dist=False,world_size=-1)
         else:
             print("Entering Normal Setting with limited data...")
-            normal_train_setting_with_ssl_data(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1)
+            normal_train_setting_with_ssl_data(model,batch_size,device,multi,epochs,resume_enabled,nprocs=-1,dist=False,world_size=-1)
     else:
         # print("single_gpu: ",single_gpu)
         init_seeds(args.local_rank)
         # print("Running Main...")
 
-        main(args.local_rank,args.nprocs,args.batch_size,resume_enabled,epochs,multi)
+        main(args.local_rank,args.nprocs,args.batch_size,resume_enabled,epochs,multi,ssl_train=ssl_train)
         # mp.spawn(main, args=(args.local_rank,args.nprocs), nprocs=args.nprocs)
 

@@ -212,7 +212,9 @@ def normal_train_setting(model:torch.nn.Module,
                       multi:bool,
                       epochs: int,
                       resume_enabled: bool,
-                      nprocs: int):
+                      nprocs: int,
+                      dist: bool,
+                      world_size: int):
     '''
     '''
     
@@ -221,34 +223,62 @@ def normal_train_setting(model:torch.nn.Module,
     d_train, d_val = load_and_prepare_pcap()
     print("Data Loading Done!")
     # batch_size = 4
-    train_dataloader = torch.utils.data.DataLoader(
-        d_train, batch_size=batch_size, shuffle=True)
+    if dist:
+            # batch_size = 4
+        train_sampler = torch.utils.data.distributed.DistributedSampler(d_train)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(d_val,shuffle=False)
+        train_dataloader = torch.utils.data.DataLoader(
+            d_train, batch_size=batch_size, pin_memory= True, sampler=train_sampler)
 
-    val_dataloader = torch.utils.data.DataLoader(
-        d_val, batch_size=batch_size, shuffle=False)
+        val_dataloader = torch.utils.data.DataLoader(
+            d_val, batch_size=batch_size, pin_memory=True,sampler=val_sampler)
+    else:
+        train_dataloader = torch.utils.data.DataLoader(
+            d_train, batch_size=batch_size, shuffle=True)
+
+        val_dataloader = torch.utils.data.DataLoader(
+            d_val, batch_size=batch_size, shuffle=False)
     # print(next(iter()))
     print(dict(Counter(d_train.target.tolist())))
     print(dict(Counter(d_val.target.tolist())))
     optimizer = get_optimizer(model)
-    init_seeds(0)
+    if dist:
+        init_seeds(0)
 
-    
-    trainer = PytorchDDPTrainer(
+    if dist:
+        trainer = PytorchDDPTrainer(
         model=model,
         train_data=train_dataloader,
-        train_sampler=None,
+        train_sampler=train_sampler,
         val_data=val_dataloader,
-        val_sampler=None,
+        val_sampler=val_sampler,
         optimizer=optimizer,
         gpu_id=device,
         dist=multi,
         save_every=1,
-        model_dir=os.path.join(os.path.dirname(__file__),'../models'),
+        model_dir='models/',
         epochs=epochs,
         resume_enabled=resume_enabled,
-        nprocs=-1
-    )
-    trainer.train()
+        nprocs = world_size
+        )
+        trainer.train()
+    else:
+        trainer = PytorchDDPTrainer(
+            model=model,
+            train_data=train_dataloader,
+            train_sampler=None,
+            val_data=val_dataloader,
+            val_sampler=None,
+            optimizer=optimizer,
+            gpu_id=device,
+            dist=multi,
+            save_every=1,
+            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
+            epochs=epochs,
+            resume_enabled=resume_enabled,
+            nprocs=-1
+        )
+        trainer.train()
 
 
 if __name__ == '__main__':

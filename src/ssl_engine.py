@@ -31,6 +31,7 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
         train_data: DataLoader,
         unlabeled_train_data: DataLoader,
         train_sampler: DataLoader,
+        unlabeled_train_sampler: DataLoader,
         val_data: DataLoader,
         unlabeled_val_data: DataLoader,
         val_sampler,
@@ -59,6 +60,7 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
                        nprocs)
         self.unlabeled_train_data = unlabeled_train_data
         self.unlabeled_val_data = unlabeled_val_data
+        self.unlabeled_train_sampler = unlabeled_train_sampler
         assert self.unlabeled_train_data is not None
 
     def _run_batch_ssl(self,lb_source, lb_targets,ulb_source, ulb_targets,val=False):
@@ -67,11 +69,13 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
         if not val:
             num_lb = lb_targets.shape[0]
             noise = torch.randn(ulb_source.shape)*1e-7
-            percent_noise = 0.1
-            print(f"ulb std:{ulb_source.std()}, mean: {ulb_source.mean()}")
-
-            ulb_source_noise = noise * percent_noise + ulb_source * (1 - percent_noise)
-            print(f"ulb std:{ulb_source_noise.std()}, mean: {ulb_source_noise.mean()}")
+            noise = noise.to(self.gpu_id)
+            percent_noise = torch.FloatTensor([0.1])
+            percent_noise=percent_noise.to(self.gpu_id)
+            constant = torch.FloatTensor([1]) 
+            constant = constant.to(self.gpu_id)
+            ulb_source_noise = noise * percent_noise + ulb_source * (constant- percent_noise)
+            ulb_source_noise.to(self.gpu_id)
 
             # ulb_source+=torch.randn((1))
             # print(f"ulb std:{ulb_source.std()}, mean: {ulb_source.mean()}")
@@ -82,7 +86,7 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
             sup_loss = F.cross_entropy(logits_x_lb,lb_targets)
             _,preds = torch.max(logits_x_lb,1)
             pseudo_label = gen_pseudo_label(logits_x_ulb,use_hard_label=True,label_smoothing=0.7)
-            print("pseudo_label: ",pseudo_label)
+            # print("pseudo_label: ",pseudo_label)
             consistency_l = consistency_loss(logits_x_ulb_s,pseudo_label,name='mse')
             total_loss = sup_loss + 0.05*consistency_l
             if self.dist:
@@ -130,6 +134,8 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
             self.train_sampler.set_epoch(e)
         if self.val_sampler is not None:
             self.val_sampler.set_epoch(e)
+        if self.unlabeled_train_sampler is not None:
+            self.unlabeled_train_sampler.set_epoch(e)
         b_sz = len(next(iter(self.train_data))[0])
         if self.gpu_id in {'cpu',0}:
             print("[Device {}] Epoch {} | Batchize: {} | Steps: {}".format(self.gpu_id,e,b_sz,len(self.train_data)))
@@ -213,7 +219,8 @@ def normal_train_setting_with_ssl_data(model:torch.nn.Module,
                       multi:bool,
                       epochs: int,
                       resume_enabled: bool,
-                      nprocs: int):
+                      nprocs: int,
+                      dist:bool):
     '''
     '''
     # model = classify_conv_model()# Make DDP
@@ -222,38 +229,71 @@ def normal_train_setting_with_ssl_data(model:torch.nn.Module,
     d_train,d_unlabeled_train, d_val = get_pcap_ssl_and_val_non_ssl_dataset()
     print("Data Loading Done!")
     # batch_size = 4
-    train_dataloader = torch.utils.data.DataLoader(
-        d_train, batch_size=batch_size, shuffle=True)
-    train_unlabeled_dataloader = torch.utils.data.DataLoader(
-        d_unlabeled_train, batch_size=batch_size, shuffle=True)
-    val_dataloader = torch.utils.data.DataLoader(
-        d_val, batch_size=batch_size, shuffle=False)
+    if dist:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(d_train)
+        unl_train_sampler = torch.utils.data.distributed.DistributedSampler(d_unlabeled_train)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(d_val,shuffle=False)
+
+        train_dataloader = torch.utils.data.DataLoader(
+            d_train, batch_size=batch_size, pin_memory= True, sampler=train_sampler)
+        train_unlabeled_dataloader = torch.utils.data.DataLoader(
+            d_unlabeled_train, batch_size=batch_size, sampler=unl_train_sampler)
+        val_dataloader = torch.utils.data.DataLoader(
+            d_val, batch_size=batch_size, pin_memory=True,sampler=val_sampler)
+    else:
+        train_dataloader = torch.utils.data.DataLoader(
+            d_train, batch_size=batch_size, shuffle=True)
+        train_unlabeled_dataloader = torch.utils.data.DataLoader(
+            d_unlabeled_train, batch_size=batch_size, shuffle=True)
+        val_dataloader = torch.utils.data.DataLoader(
+            d_val, batch_size=batch_size, shuffle=False)
     # print(next(iter()))
     print(dict(Counter(d_train.target.tolist())))
     print(dict(Counter(d_val.target.tolist())))
     optimizer = get_optimizer(model)
     init_seeds(0)
 
-    device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
-
-    trainer = SSLPytorchDDPTrainer(
-        model=model,
-        train_data=train_dataloader,
-        unlabeled_train_data=train_unlabeled_dataloader,
-        train_sampler=None,
-        val_data=val_dataloader,
-        unlabeled_val_data=None,
-        val_sampler=None,
-        optimizer=optimizer,
-        gpu_id=device,
-        dist=multi,
-        save_every=1,
-        model_dir=os.path.join(os.path.dirname(__file__),'../models'),
-        epochs=epochs,
-        resume_enabled=resume_enabled,
-        nprocs=-1
-    )
-    trainer.train()
+    device = 0 if torch.cuda.is_available() else "cpu"
+    if dist:
+        trainer = SSLPytorchDDPTrainer(
+            model=model,
+            train_data=train_dataloader,
+            unlabeled_train_data=train_unlabeled_dataloader,
+            train_sampler=train_sampler,
+            unlabeled_train_sampler=unl_train_sampler,
+            val_data=val_dataloader,
+            unlabeled_val_data=None,
+            val_sampler=val_sampler,
+            optimizer=optimizer,
+            gpu_id=device,
+            dist=multi,
+            save_every=1,
+            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
+            epochs=epochs,
+            resume_enabled=resume_enabled,
+            nprocs=-1
+        )
+        trainer.train() 
+    else:
+        trainer = SSLPytorchDDPTrainer(
+            model=model,
+            train_data=train_dataloader,
+            unlabeled_train_data=train_unlabeled_dataloader,
+            train_sampler=None,
+            unlabeled_train_sampler=None,
+            val_data=val_dataloader,
+            unlabeled_val_data=None,
+            val_sampler=None,
+            optimizer=optimizer,
+            gpu_id=device,
+            dist=multi,
+            save_every=1,
+            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
+            epochs=epochs,
+            resume_enabled=resume_enabled,
+            nprocs=-1
+        )
+        trainer.train()
 
 def ssl_train_setting(model:torch.nn.Module,
                       batch_size:int,
@@ -261,7 +301,9 @@ def ssl_train_setting(model:torch.nn.Module,
                       multi:bool,
                       epochs: int,
                       resume_enabled: bool,
-                      nprocs: int):
+                      nprocs: int,
+                      dist: bool,
+                      world_size: int):
     '''
     '''
     # model = classify_conv_model()# Make DDP
@@ -270,37 +312,70 @@ def ssl_train_setting(model:torch.nn.Module,
     d_train,d_unlabeled_train, d_val = get_pcap_ssl_and_val_non_ssl_dataset()
     print("Data Loading Done!")
     # batch_size = 4
-    train_dataloader = torch.utils.data.DataLoader(
-        d_train, batch_size=batch_size, shuffle=True)
-    train_unlabeled_dataloader = torch.utils.data.DataLoader(
-        d_unlabeled_train, batch_size=batch_size*4, shuffle=True)
-    val_dataloader = torch.utils.data.DataLoader(
-        d_val, batch_size=batch_size, shuffle=False)
+    if dist:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(d_train)
+        unl_train_sampler = torch.utils.data.distributed.DistributedSampler(d_unlabeled_train)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(d_val,shuffle=False)
+
+        train_dataloader = torch.utils.data.DataLoader(
+            d_train, batch_size=batch_size, pin_memory= True, sampler=train_sampler)
+        train_unlabeled_dataloader = torch.utils.data.DataLoader(
+            d_unlabeled_train, batch_size=batch_size, sampler=unl_train_sampler)
+        val_dataloader = torch.utils.data.DataLoader(
+            d_val, batch_size=batch_size, pin_memory=True,sampler=val_sampler)
+    else:
+        train_dataloader = torch.utils.data.DataLoader(
+            d_train, batch_size=batch_size, shuffle=True)
+        train_unlabeled_dataloader = torch.utils.data.DataLoader(
+            d_unlabeled_train, batch_size=batch_size, shuffle=True)
+        val_dataloader = torch.utils.data.DataLoader(
+            d_val, batch_size=batch_size, shuffle=False)
     # print(next(iter()))
     print(dict(Counter(d_train.target.tolist())))
     print(dict(Counter(d_val.target.tolist())))
     optimizer = get_optimizer(model)
     init_seeds(0)
 
-    device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
-    trainer = SSLPytorchDDPTrainer(
-        model=model,
-        train_data=train_dataloader,
-        unlabeled_train_data=train_unlabeled_dataloader,
-        train_sampler=None,
-        val_data=val_dataloader,
-        unlabeled_val_data=None,
-        val_sampler=None,
-        optimizer=optimizer,
-        gpu_id=device,
-        dist=multi,
-        save_every=1,
-        model_dir=os.path.join(os.path.dirname(__file__),'../models'),
-        epochs=epochs,
-        resume_enabled=resume_enabled,
-        nprocs=-1
-    )
-    trainer.train()
+    if dist:
+        trainer = SSLPytorchDDPTrainer(
+            model=model,
+            train_data=train_dataloader,
+            unlabeled_train_data=train_unlabeled_dataloader,
+            train_sampler=train_sampler,
+            unlabeled_train_sampler=unl_train_sampler,
+            val_data=val_dataloader,
+            unlabeled_val_data=None,
+            val_sampler=val_sampler,
+            optimizer=optimizer,
+            gpu_id=device,
+            dist=multi,
+            save_every=1,
+            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
+            epochs=epochs,
+            resume_enabled=resume_enabled,
+            nprocs=world_size
+        )
+        trainer.train() 
+    else:
+        trainer = SSLPytorchDDPTrainer(
+            model=model,
+            train_data=train_dataloader,
+            unlabeled_train_data=train_unlabeled_dataloader,
+            train_sampler=None,
+            unlabeled_train_sampler=None,
+            val_data=val_dataloader,
+            unlabeled_val_data=None,
+            val_sampler=None,
+            optimizer=optimizer,
+            gpu_id=device,
+            dist=multi,
+            save_every=1,
+            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
+            epochs=epochs,
+            resume_enabled=resume_enabled,
+            nprocs=-1
+        )
+        trainer.train()
  
 if __name__ == '__main__':
     print("Hi")
