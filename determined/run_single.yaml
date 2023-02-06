@@ -1,0 +1,20 @@
+name: cyber_ssl_anomaly_det_test
+entrypoint: >-
+  python determined/coreapi_train.py
+
+hyperparameters:
+  batch_size: 16
+  multi: False
+  epochs: 10
+  dist: False
+
+max_restarts: 0
+resources:
+  slots_per_trial: 1
+
+searcher:
+  name: single
+  metric: avg_val_acc
+  max_length: 11
+  smaller_is_better: False
+

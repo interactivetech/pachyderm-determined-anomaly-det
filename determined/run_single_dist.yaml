@@ -1,0 +1,21 @@
+name: cyber_ssl_anomaly_det_test
+entrypoint: >-
+  python -m determined.launch.torch_distributed
+  python determined/coreapi_train.py
+
+hyperparameters:
+  batch_size: 16
+  multi: True
+  epochs: 10
+  dist: True
+
+max_restarts: 0
+resources:
+  slots_per_trial: 4
+
+searcher:
+  name: single
+  metric: avg_val_acc
+  max_length: 33
+  smaller_is_better: False
+
