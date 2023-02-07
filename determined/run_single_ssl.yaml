@@ -1,18 +1,17 @@
 name: cyber_ssl_anomaly_det_test
 entrypoint: >-
-  python -m determined.launch.torch_distributed
   python determined/coreapi_train.py
 
 hyperparameters:
   batch_size: 16
-  multi: True
+  multi: False
   epochs: -1
-  dist: True
-  ssl_train: False
+  dist: False
+  ssl_train: True
 
 max_restarts: 0
 resources:
-  slots_per_trial: 4
+  slots_per_trial: 1
 
 searcher:
   name: single

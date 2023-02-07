@@ -8,7 +8,7 @@ hyperparameters:
   multi: True
   epochs: -1
   dist: True
-  ssl_train: False
+  ssl_train: True
 
 max_restarts: 0
 resources:

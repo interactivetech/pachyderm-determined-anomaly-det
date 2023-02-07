@@ -5,8 +5,9 @@ entrypoint: >-
 hyperparameters:
   batch_size: 16
   multi: False
-  epochs: 10
+  epochs: -1
   dist: False
+  ssl_train: False
 
 max_restarts: 0
 resources:

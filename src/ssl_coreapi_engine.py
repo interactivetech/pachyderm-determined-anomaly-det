@@ -19,12 +19,11 @@ from utils import extract_iat_features,load_data, de_parallelize_model, init_see
 import random
 from torch.distributed import init_process_group,destroy_process_group
 import datetime
-from engine import PytorchDDPTrainer
-from ssl_utils import split_ssl_data, gen_pseudo_label, consistency_loss, ce_loss
-from data import classify_anomaly_dataset, prepare_pcap_data, load_and_prepare_pcap, get_ssl_pcap_dataset, get_pcap_ssl_and_val_non_ssl_dataset
+from src.coreapi_engine import CoreAPIEngine
+from src.ssl_utils import split_ssl_data, gen_pseudo_label, consistency_loss, ce_loss
+from src.data import classify_anomaly_dataset, prepare_pcap_data, load_and_prepare_pcap, get_ssl_pcap_dataset, get_pcap_ssl_and_val_non_ssl_dataset, load_and_prepare_pcap_numpy
 
-
-class SSLPytorchDDPTrainer(PytorchDDPTrainer):
+class SSLCoreAPITrainer(CoreAPIEngine):
     def __init__(
         self,
         model: torch.nn.Module,
@@ -42,31 +41,36 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
         model_dir: str,
         epochs: int,
         resume_enabled: bool,
-        nprocs: int
+        nprocs: int,
+        core_context: object,
+        latest_ckpt: object, 
+        trial_id: int
     )-> None:
-
         super().__init__(model,
-                       train_data,
-                       train_sampler,
-                       val_data,
-                       val_sampler,
-                       optimizer,
-                       gpu_id,
-                       dist,
-                       save_every,
-                       model_dir,
-                       epochs,
-                       resume_enabled,
-                       nprocs)
+            train_data,
+            train_sampler,
+            val_data,
+            val_sampler,
+            optimizer,
+            gpu_id,
+            dist,
+            save_every,
+            model_dir,
+            epochs,
+            resume_enabled,
+            nprocs,
+            core_context,
+            latest_ckpt, 
+            trial_id)
         self.unlabeled_train_data = unlabeled_train_data
         self.unlabeled_val_data = unlabeled_val_data
         self.unlabeled_train_sampler = unlabeled_train_sampler
         assert self.unlabeled_train_data is not None
-
+    
     def _run_batch_ssl(self,
-                       lb_source, 
+                       lb_source,
                        lb_targets,
-                       ulb_source, 
+                       ulb_source,
                        ulb_targets,
                        val=False):
         '''
@@ -103,13 +107,21 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
                 '''
                 torch.distributed.barrier()
                 reduced_loss = reduce_mean(total_loss,self.nprocs)
+                reduced_sup_loss = reduce_mean(sup_loss,self.nprocs)
+                reduced_consistency_loss = reduce_mean(consistency_l,self.nprocs)
             else:
                 reduced_loss=total_loss
+                reduced_sup_loss=sup_loss
+                reduced_consistency_loss=consistency_l
             self.optimizer.zero_grad()
-            total_loss.backward()
+            reduced_loss.backward()
             self.optimizer.step()
-
-            return reduced_loss,preds
+            reduced_loss_dict = {
+                'total_loss': reduced_loss,
+                'supervised_loss': reduced_sup_loss,
+                'consistency_loss':reduced_consistency_loss
+            }
+            return reduced_loss_dict,preds
         else:
             with torch.no_grad():
                 num_lb = lb_targets.shape[0]
@@ -121,16 +133,22 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
                 _,preds = torch.max(output,1)
                 pseudo_label = gen_pseudo_label(logits_u_lb)
                 consistency_l = consistency_loss(logits_u_lb,pseudo_label)
-                total_loss = sup_loss + consistency_l
+                total_loss = sup_loss + 0.05*consistency_l
                 if self.dist:
                     torch.distributed.barrier()
                     reduced_loss = reduce_mean(total_loss,self.nprocs)
-
+                    reduced_sup_loss = reduce_mean(sup_loss,self.nprocs)
+                    reduced_consistency_loss = reduce_mean(consistency_l,self.nprocs)
                 else:
                     reduced_loss=total_loss
-
-                return reduced_loss,preds    
-        
+                    reduced_sup_loss=sup_loss
+                    reduced_consistency_loss=consistency_l
+                reduced_loss_dict = {
+                'total_loss': reduced_loss,
+                'supervised_loss': sup_loss,
+                'consistency_loss':consistency_l
+                }
+                return reduced_loss_dict,preds 
     def _run_epoch(self,e):
         '''
         '''
@@ -147,6 +165,8 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
         if self.dist == True:
             self.train_data.sampler.set_epoch(self.epoch)
         train_loss_total = 0
+        train_supervised_loss_total = 0
+        train_unsupervised_loss_total = 0
         val_loss_total = 0
         train_correct_total = 0
         val_correct_total = 0
@@ -157,7 +177,7 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
             lb_targets = lb_targets.to(self.gpu_id)
             ulb_source = ulb_source.to(self.gpu_id)
             ulb_targets = ulb_targets.to(self.gpu_id)
-            loss,preds = self._run_batch_ssl(lb_source, 
+            reduced_loss_dict,preds = self._run_batch_ssl(lb_source, 
                                          lb_targets,
                                          ulb_source,
                                          ulb_targets,
@@ -170,13 +190,16 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
                 inconsistent error
                 '''
                 torch.distributed.barrier()
-                train_loss_total+=loss
-
+                train_loss_total+=reduced_loss_dict['total_loss']
+                train_supervised_loss_total+=reduced_loss_dict['supervised_loss']
+                train_unsupervised_loss_total+=reduced_loss_dict['consistency_loss']
                 train_acc=accuracy(preds,lb_targets.data)[0]
                 train_correct_total += reduce_mean(train_acc,self.nprocs)
 
             else:
-                train_loss_total+=loss
+                train_loss_total+=reduced_loss_dict['total_loss']
+                train_supervised_loss_total+=reduced_loss_dict['supervised_loss']
+                train_unsupervised_loss_total+=reduced_loss_dict['consistency_loss']
                 train_acc=accuracy(preds,lb_targets.data)[0]
                 train_correct_total+=train_acc
 
@@ -205,9 +228,30 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
                 
         if self.gpu_id in {'cpu',0}:
             avg_epoch_train_loss = train_loss_total/len(self.train_data)
+            avg_epoch_train_supervised_loss = train_supervised_loss_total/len(self.train_data)
+            avg_epoch_train_unsupervised_loss = train_unsupervised_loss_total/len(self.train_data)
+
             avg_train_acc = train_correct_total/len(self.train_data)
             avg_epoch_val_loss = val_loss_total/len(self.val_data)
             avg_val_acc = val_correct_total/len(self.val_data)
+
+            self.core_context.train.report_training_metrics(
+                steps_completed=e+1,
+                metrics = {
+                    'avg_train_acc':avg_train_acc.item(),
+                    'avg_train_loss':avg_epoch_train_loss.item(),
+                    'avg_train_supervised_loss':avg_epoch_train_supervised_loss.item(),
+                    'avg_train_unsupervised_loss':avg_epoch_train_unsupervised_loss.item()
+                }
+            )
+            self.core_context.train.report_validation_metrics(
+                steps_completed=e+1,
+                metrics = {
+                    'avg_val_acc':avg_val_acc.item(),
+                    'avg_val_loss':avg_epoch_val_loss.item(),
+                }
+            )
+
             self.losses.append(avg_epoch_train_loss)
             self.train_accs.append(avg_train_acc)
             self.val_losses.append(avg_epoch_val_loss)
@@ -218,87 +262,6 @@ class SSLPytorchDDPTrainer(PytorchDDPTrainer):
         if self.gpu_id in {'cpu',0}:
             print(f"epoch {e} || Train Acc:", self.train_accs[-1]," || Val Acc:", self.val_accs[-1])
 
-def normal_train_setting_with_ssl_data(model:torch.nn.Module,
-                      batch_size:int,
-                      device:object,
-                      multi:bool,
-                      epochs: int,
-                      resume_enabled: bool,
-                      nprocs: int,
-                      dist:bool):
-    '''
-    '''
-    # model = classify_conv_model()# Make DDP
-    # print("PATH: ", os.path.dirname(__file__))
-    print("Loading Data...")
-    d_train,d_unlabeled_train, d_val = get_pcap_ssl_and_val_non_ssl_dataset()
-    print("Data Loading Done!")
-    # batch_size = 4
-    if dist:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(d_train)
-        unl_train_sampler = torch.utils.data.distributed.DistributedSampler(d_unlabeled_train)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(d_val,shuffle=False)
-
-        train_dataloader = torch.utils.data.DataLoader(
-            d_train, batch_size=batch_size, pin_memory= True, sampler=train_sampler)
-        train_unlabeled_dataloader = torch.utils.data.DataLoader(
-            d_unlabeled_train, batch_size=batch_size, sampler=unl_train_sampler)
-        val_dataloader = torch.utils.data.DataLoader(
-            d_val, batch_size=batch_size, pin_memory=True,sampler=val_sampler)
-    else:
-        train_dataloader = torch.utils.data.DataLoader(
-            d_train, batch_size=batch_size, shuffle=True)
-        train_unlabeled_dataloader = torch.utils.data.DataLoader(
-            d_unlabeled_train, batch_size=batch_size, shuffle=True)
-        val_dataloader = torch.utils.data.DataLoader(
-            d_val, batch_size=batch_size, shuffle=False)
-    # print(next(iter()))
-    print(dict(Counter(d_train.target.tolist())))
-    print(dict(Counter(d_val.target.tolist())))
-    optimizer = get_optimizer(model)
-    init_seeds(0)
-
-    device = 0 if torch.cuda.is_available() else "cpu"
-    if dist:
-        trainer = SSLPytorchDDPTrainer(
-            model=model,
-            train_data=train_dataloader,
-            unlabeled_train_data=train_unlabeled_dataloader,
-            train_sampler=train_sampler,
-            unlabeled_train_sampler=unl_train_sampler,
-            val_data=val_dataloader,
-            unlabeled_val_data=None,
-            val_sampler=val_sampler,
-            optimizer=optimizer,
-            gpu_id=device,
-            dist=multi,
-            save_every=1,
-            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
-            epochs=epochs,
-            resume_enabled=resume_enabled,
-            nprocs=-1
-        )
-        trainer.train() 
-    else:
-        trainer = SSLPytorchDDPTrainer(
-            model=model,
-            train_data=train_dataloader,
-            unlabeled_train_data=train_unlabeled_dataloader,
-            train_sampler=None,
-            unlabeled_train_sampler=None,
-            val_data=val_dataloader,
-            unlabeled_val_data=None,
-            val_sampler=None,
-            optimizer=optimizer,
-            gpu_id=device,
-            dist=multi,
-            save_every=1,
-            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
-            epochs=epochs,
-            resume_enabled=resume_enabled,
-            nprocs=-1
-        )
-        trainer.train()
 
 def ssl_train_setting(model:torch.nn.Module,
                       batch_size:int,
@@ -308,10 +271,12 @@ def ssl_train_setting(model:torch.nn.Module,
                       resume_enabled: bool,
                       nprocs: int,
                       dist: bool,
-                      world_size: int):
+                      world_size: int,
+                      core_context, 
+                      latest_ckpt, 
+                      trial_id):
     '''
     '''
-    # model = classify_conv_model()# Make DDP
     # print("PATH: ", os.path.dirname(__file__))
     print("Loading Data...")
     d_train,d_unlabeled_train, d_val = get_pcap_ssl_and_val_non_ssl_dataset()
@@ -327,42 +292,46 @@ def ssl_train_setting(model:torch.nn.Module,
         train_unlabeled_dataloader = torch.utils.data.DataLoader(
             d_unlabeled_train, batch_size=batch_size, sampler=unl_train_sampler)
         val_dataloader = torch.utils.data.DataLoader(
-            d_val, batch_size=batch_size, pin_memory=True,sampler=val_sampler)
+            d_val, batch_size=4*batch_size, pin_memory=True,sampler=val_sampler)
     else:
         train_dataloader = torch.utils.data.DataLoader(
             d_train, batch_size=batch_size, shuffle=True)
         train_unlabeled_dataloader = torch.utils.data.DataLoader(
-            d_unlabeled_train, batch_size=batch_size, shuffle=True)
+            d_unlabeled_train, batch_size=4*batch_size, shuffle=True)
         val_dataloader = torch.utils.data.DataLoader(
             d_val, batch_size=batch_size, shuffle=False)
+    # print(next(iter()))
     # print(next(iter()))
     print(dict(Counter(d_train.target.tolist())))
     print(dict(Counter(d_val.target.tolist())))
     optimizer = get_optimizer(model)
-    init_seeds(0)
-
+    if not dist:
+        init_seeds(0)
     if dist:
-        trainer = SSLPytorchDDPTrainer(
-            model=model,
-            train_data=train_dataloader,
-            unlabeled_train_data=train_unlabeled_dataloader,
-            train_sampler=train_sampler,
-            unlabeled_train_sampler=unl_train_sampler,
-            val_data=val_dataloader,
-            unlabeled_val_data=None,
-            val_sampler=val_sampler,
-            optimizer=optimizer,
-            gpu_id=device,
-            dist=multi,
-            save_every=1,
-            model_dir=os.path.join(os.path.dirname(__file__),'../models'),
-            epochs=epochs,
-            resume_enabled=resume_enabled,
-            nprocs=world_size
+        trainer = SSLCoreAPITrainer(
+        model=model,
+        train_data=train_dataloader,
+        unlabeled_train_data=train_unlabeled_dataloader,
+        train_sampler=train_sampler,
+        unlabeled_train_sampler=unl_train_sampler,
+        val_data=val_dataloader,
+        unlabeled_val_data=None,
+        val_sampler=val_sampler,
+        optimizer=optimizer,
+        gpu_id=device,
+        dist=multi,
+        save_every=1,
+        model_dir='models/',
+        epochs=-1,
+        resume_enabled=resume_enabled,
+        nprocs = world_size,
+        core_context=core_context, 
+        latest_ckpt=latest_ckpt, 
+        trial_id=trial_id
         )
-        trainer.train() 
+        trainer.train()
     else:
-        trainer = SSLPytorchDDPTrainer(
+        trainer = SSLCoreAPITrainer(
             model=model,
             train_data=train_dataloader,
             unlabeled_train_data=train_unlabeled_dataloader,
@@ -376,11 +345,11 @@ def ssl_train_setting(model:torch.nn.Module,
             dist=multi,
             save_every=1,
             model_dir=os.path.join(os.path.dirname(__file__),'../models'),
-            epochs=epochs,
+            epochs=-1,
             resume_enabled=resume_enabled,
-            nprocs=-1
+            nprocs=-1,
+            core_context=core_context, 
+            latest_ckpt=latest_ckpt, 
+            trial_id=trial_id
         )
         trainer.train()
- 
-if __name__ == '__main__':
-    print("Hi")

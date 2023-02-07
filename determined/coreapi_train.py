@@ -4,6 +4,7 @@ from src.model import   classify_conv_model
 import torch
 from pprint import pprint
 from src.coreapi_engine import run_train
+from src.ssl_coreapi_engine import ssl_train_setting
 import argparse
 import os
 parser = argparse.ArgumentParser(description='')
@@ -36,56 +37,71 @@ def main(rank:int,
     # 4. create a context, and pass it to the main function
     with det.core.init(distributed=distributed) as core_context:
         # core_context, latest_checkpoint, trial_id
-        run_train(model,
-            batch_size,
-            rank,
-            multi,
-            epochs,
-            resume_enabled,
-            nprocs=world_size,
-            dist=multi,
-            world_size=world_size,
-            core_context=core_context, 
-            latest_ckpt=latest_ckpt, 
-            trial_id=trial_id)
-
-def dist_main(rank:int,
-         world_size: int,
-         batch_size: int,
-         resume_enabled: bool,
-         epochs: int, 
-         multi: bool, 
-         ssl_train: bool,
-         latest_ckpt: object,
-         trial_id: int,
-         hparams: dict
-         ):
-    '''
-    '''
-    # print("DDP Setup...")
-    torch.cuda.set_device(rank)
-    ddp_setup(rank,world_size=world_size)
-    
-    #3. define distributed option for det.core.init()
-    try:
-        # required if using multiple GPUs
-        distributed = det.core.DistributedContext.from_torch_distributed()
-    except:
-        distributed = None 
-
-    model = classify_conv_model()
-
-    # 4. create a context, and pass it to the main function
-    with det.core.init(distributed=distributed) as core_context:
-        # core_context, latest_checkpoint, trial_id
         if ssl_train:
-            # ssl_train_setting(model,batch_size,rank,multi,epochs,resume_enabled,nprocs=world_size,dist=multi,world_size=world_size)
-            raise NotImplementedError
+            ssl_train_setting(model,
+                batch_size,
+                rank,
+                multi,
+                epochs,
+                resume_enabled,
+                nprocs=world_size,
+                dist=multi,
+                world_size=world_size,
+                core_context=core_context, 
+                latest_ckpt=latest_ckpt, 
+                trial_id=trial_id)
         else:
-            # normal_train_setting(model,batch_size,rank,multi,epochs,resume_enabled,nprocs=world_size,dist=multi,world_size=world_size)
-            raise NotImplementedError
+            print("Not SSL Setting")
+            run_train(model,
+                batch_size,
+                rank,
+                multi,
+                epochs,
+                resume_enabled,
+                nprocs=world_size,
+                dist=multi,
+                world_size=world_size,
+                core_context=core_context, 
+                latest_ckpt=latest_ckpt, 
+                trial_id=trial_id)
 
-    # parser.add_argument('')
+# def dist_main(rank:int,
+#          world_size: int,
+#          batch_size: int,
+#          resume_enabled: bool,
+#          epochs: int, 
+#          multi: bool, 
+#          ssl_train: bool,
+#          latest_ckpt: object,
+#          trial_id: int,
+#          hparams: dict
+#          ):
+#     '''
+#     '''
+#     # print("DDP Setup...")
+#     torch.cuda.set_device(rank)
+#     ddp_setup(rank,world_size=world_size)
+    
+#     #3. define distributed option for det.core.init()
+#     try:
+#         # required if using multiple GPUs
+#         distributed = det.core.DistributedContext.from_torch_distributed()
+#     except:
+#         distributed = None 
+
+#     model = classify_conv_model()
+
+#     # 4. create a context, and pass it to the main function
+#     with det.core.init(distributed=distributed) as core_context:
+#         # core_context, latest_checkpoint, trial_id
+#         if ssl_train:
+#             # ssl_train_setting(model,batch_size,rank,multi,epochs,resume_enabled,nprocs=world_size,dist=multi,world_size=world_size)
+#             raise NotImplementedError
+#         else:
+#             # normal_train_setting(model,batch_size,rank,multi,epochs,resume_enabled,nprocs=world_size,dist=multi,world_size=world_size)
+#             raise NotImplementedError
+
+#     # parser.add_argument('')
 
 if __name__ == '__main__':
     nprocs = torch.cuda.device_count()
@@ -137,6 +153,7 @@ if __name__ == '__main__':
     multi = hparams['multi']
     epochs = hparams['epochs']
     dist = hparams['dist']
+    ssl_train = hparams['ssl_train']
     print("latest_ckpt: ",latest_ckpt)
     print("trial_id: ",trial_id)
     '''
@@ -158,7 +175,7 @@ if __name__ == '__main__':
             resume_enabled=False,
             epochs=epochs,
             multi=multi,
-            ssl_train=False,
+            ssl_train=ssl_train,
             latest_ckpt=latest_ckpt,
             trial_id=trial_id,
             hparams=hparams)
@@ -179,7 +196,7 @@ if __name__ == '__main__':
             resume_enabled=False,
             epochs=epochs,
             multi=multi,
-            ssl_train=False,
+            ssl_train=ssl_train,
             latest_ckpt=latest_ckpt,
             trial_id=trial_id,
             hparams=hparams)
