@@ -1,0 +1,32 @@
+name: cyber_ssl_anomaly_det_test
+entrypoint: >-
+  python determined/coreapi_train.py
+
+hyperparameters:
+  batch_size: categorical
+      vals:
+        - 4
+        - 8
+        - 12
+        - 16
+        - 20
+        - 24
+        - 28
+        - 32
+  multi: False
+  epochs: -1
+  dist: False
+  ssl_train: True
+
+max_restarts: 0
+resources:
+  slots_per_trial: 8
+
+searcher:
+  name: grid
+  metric: avg_val_acc
+  max_length: 33
+  smaller_is_better: False
+  max_trials: 8
+  max_concurrent_trials: 8
+

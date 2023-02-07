@@ -4,7 +4,7 @@ entrypoint: >-
   python determined/coreapi_train.py
 
 hyperparameters:
-  batch_size: 16
+  batch_size: 4
   multi: True
   epochs: -1
   dist: True
@@ -12,7 +12,7 @@ hyperparameters:
 
 max_restarts: 0
 resources:
-  slots_per_trial: 4
+  slots_per_trial: 16
 
 searcher:
   name: single
